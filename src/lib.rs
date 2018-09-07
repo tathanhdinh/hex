@@ -1,21 +1,46 @@
-#![deny(missing_docs,
-        missing_debug_implementations, missing_copy_implementations,
-        trivial_casts, trivial_numeric_casts,
-        unsafe_code,
-        unstable_features,
-        unused_import_braces, unused_qualifications)]
+#![deny(
+    // missing_docs,
+    missing_debug_implementations,
+    missing_copy_implementations,
+    trivial_casts,
+    trivial_numeric_casts,
+    unsafe_code,
+    unstable_features,
+    unused_import_braces,
+    unused_qualifications
+)]
 // #![allow(dead_code)]
 
 //! general hex lib
-extern crate clap;
 extern crate ansi_term;
+extern crate clap;
+extern crate failure;
 
 use clap::ArgMatches;
-use std::fs;
-use std::fs::File;
-use std::io::Read;
-use std::io::BufReader;
-use std::f64;
+use failure::Fail;
+use std::{
+    f64,
+    fs::{self, File},
+    io::{self, BufReader, BufWriter, Read, Write},
+    result,
+};
+
+#[derive(Fail, Debug)]
+pub enum Error {
+    #[fail(display = "IO error: {}", _0)]
+    Io(#[cause] io::Error),
+
+    // #[fail(display = "Application error: {}", _0)]
+    // Application(String),
+}
+
+impl From<io::Error> for Error {
+    fn from(err: io::Error) -> Self {
+        Error::Io(err)
+    }
+}
+
+pub(crate) type Result<T> = result::Result<T, Error>;
 
 /// nothing ⇒ Display
 /// ? ⇒ Debug
@@ -131,57 +156,56 @@ pub fn hex_binary(b: u8) -> String {
 }
 
 /// print byte to std out
-pub fn print_byte(b: u8, format: Format, colorize: bool) {
+pub fn print_byte<T: Write>(b: u8, format: Format, colorize: bool, w: &mut T) -> Result<()> {
     let mut color: u8 = b;
     if color < 1 {
         color = 0x16;
     }
-    if colorize {
+
+    let write_result = if colorize {
         // note, for color testing: for (( i = 0; i < 256; i++ )); do echo "$(tput setaf $i)This is ($i) $(tput sgr0)"; done
         match format {
-            Format::Octal => {
-                print!(
-                    "{} ",
-                    ansi_term::Style::new()
-                        .fg(ansi_term::Color::Fixed(color))
-                        .paint(hex_octal(b))
-                )
-            }
-            Format::LowerHex => {
-                print!(
-                    "{} ",
-                    ansi_term::Style::new()
-                        .fg(ansi_term::Color::Fixed(color))
-                        .paint(hex_lower_hex(b))
-                )
-            }
-            Format::UpperHex => {
-                print!(
-                    "{} ",
-                    ansi_term::Style::new()
-                        .fg(ansi_term::Color::Fixed(color))
-                        .paint(hex_upper_hex(b))
-                )
-            }
-            Format::Binary => {
-                print!(
-                    "{} ",
-                    ansi_term::Style::new()
-                        .fg(ansi_term::Color::Fixed(color))
-                        .paint(hex_binary(b))
-                )
-            }
-            _ => print!("{}", "unk_fmt "),
+            Format::Octal => write!(
+                w,
+                "{} ",
+                ansi_term::Style::new()
+                    .fg(ansi_term::Color::Fixed(color))
+                    .paint(hex_octal(b))
+            ),
+            Format::LowerHex => write!(
+                w,
+                "{} ",
+                ansi_term::Style::new()
+                    .fg(ansi_term::Color::Fixed(color))
+                    .paint(hex_lower_hex(b))
+            ),
+            Format::UpperHex => write!(
+                w,
+                "{} ",
+                ansi_term::Style::new()
+                    .fg(ansi_term::Color::Fixed(color))
+                    .paint(hex_upper_hex(b))
+            ),
+            Format::Binary => write!(
+                w,
+                "{} ",
+                ansi_term::Style::new()
+                    .fg(ansi_term::Color::Fixed(color))
+                    .paint(hex_binary(b))
+            ),
+            _ => write!(w, "{}", "unk_fmt "),
         }
     } else {
         match format {
-            Format::Octal => print!("{} ", hex_octal(b)),
-            Format::LowerHex => print!("{} ", hex_lower_hex(b)),
-            Format::UpperHex => print!("{} ", hex_upper_hex(b)),
-            Format::Binary => print!("{} ", hex_binary(b)),
-            _ => print!("{}", "unk_fmt "),
+            Format::Octal => write!(w, "{} ", hex_octal(b)),
+            Format::LowerHex => write!(w, "{} ", hex_lower_hex(b)),
+            Format::UpperHex => write!(w, "{} ", hex_upper_hex(b)),
+            Format::Binary => write!(w, "{} ", hex_binary(b)),
+            _ => write!(w, "{}", "unk_fmt "),
         }
-    }
+    };
+
+    write_result.map_err(Error::Io)
 }
 
 /// Function wave out.
@@ -193,7 +217,7 @@ pub fn func_out(len: u64, places: usize) {
     for y in 0..len {
         let y_float: f64 = y as f64;
         let len_float: f64 = len as f64;
-        let x: f64 = ((((y_float / len_float)) * f64::consts::PI) / 2.0).sin();
+        let x: f64 = (((y_float / len_float) * f64::consts::PI) / 2.0).sin();
         let formatted_number = format!("{:.*}", places, x);
         print!("{}", formatted_number);
         print!(",");
@@ -215,7 +239,11 @@ pub fn func_out(len: u64, places: usize) {
 /// # Arguments
 ///
 /// * `matches` - Argument matches from command line.
-pub fn run(matches: ArgMatches) -> Result<(), Box<::std::error::Error>> {
+pub fn run(matches: ArgMatches) -> Result<()> {
+    let stdout = io::stdout();
+    let stdout = stdout.lock();
+    let mut stdout = BufWriter::new(stdout);
+
     let mut column_width: u64 = 10;
     if let Some(len) = matches.value_of("func") {
         let mut p: usize = 4;
@@ -262,10 +290,10 @@ pub fn run(matches: ArgMatches) -> Result<(), Box<::std::error::Error>> {
         }
 
         match matches.occurrences_of("v") {
-            0 => print!(""),
-            1 => println!("verbose 1"),
-            2 => println!("verbose 2"),
-            3 | _ => println!("verbose max"),
+            0 => write!(&mut stdout, "")?,
+            1 => write!(&mut stdout, "verbose 1")?,
+            2 => write!(&mut stdout, "verbose 2")?,
+            3 | _ => write!(&mut stdout, "verbose max")?,
         }
 
         // array output mode is mutually exclusive
@@ -273,30 +301,30 @@ pub fn run(matches: ArgMatches) -> Result<(), Box<::std::error::Error>> {
             let mut array_format = array;
             let mut page = buf_to_array(&mut buf, buf_len, column_width).unwrap();
             match array_format {
-                "r" => println!("let ARRAY: [u8; {}] = [", page.bytes),
-                "c" => println!("unsigned char ARRAY[{}] = {{", page.bytes),
-                "g" => println!("a := [{}]byte{{", page.bytes),
-                _ => println!("unknown array format"),
+                "r" => writeln!(&mut stdout, "let ARRAY: [u8; {}] = [", page.bytes)?,
+                "c" => writeln!(&mut stdout, "unsigned char ARRAY[{}] = {{", page.bytes)?,
+                "g" => writeln!(&mut stdout, "a := [{}]byte{{", page.bytes)?,
+                _ => writeln!(&mut stdout, "unknown array format")?,
             }
 
             let mut i: u64 = 0x0;
             for line in page.body.iter() {
-                print!("    ");
+                write!(&mut stdout, "    ");
                 for hex in line.hex_body.iter() {
                     i += 1;
                     if i == buf_len && array_format != "g" {
-                        print!("{}", hex_lower_hex(*hex));
+                        write!(&mut stdout, "{}", hex_lower_hex(*hex));
                     } else {
-                        print!("{}, ", hex_lower_hex(*hex));
+                        write!(&mut stdout,"{}, ", hex_lower_hex(*hex));
                     }
                 }
-                println!("");
+                writeln!(&mut stdout, "");
             }
             match array_format {
-                "r" => println!("{}", "];"),
-                "c" => println!("{}", "};"),
-                "g" => println!("{}", "}"),
-                _ => println!("unknown array format"),
+                "r" => writeln!(&mut stdout, "{}", "];")?,
+                "c" => writeln!(&mut stdout, "{}", "};")?,
+                "g" => writeln!(&mut stdout, "{}", "}")?,
+                _ => writeln!(&mut stdout, "unknown array format")?,
             }
         } else {
             // Transforms this Read instance to an Iterator over its bytes.
@@ -309,13 +337,14 @@ pub fn run(matches: ArgMatches) -> Result<(), Box<::std::error::Error>> {
             let mut offset_counter: u64 = 0x0;
             let mut byte_column: u64 = 0x0;
             let mut page = buf_to_array(&mut buf, buf_len, column_width).unwrap();
+
             for line in page.body.iter() {
                 print_offset(offset_counter);
 
                 for hex in line.hex_body.iter() {
                     offset_counter += 1;
                     byte_column += 1;
-                    print_byte(*hex, format_out, colorize);
+                    print_byte(*hex, format_out, colorize, &mut stdout)?;
 
                     if *hex > 31 && *hex < 127 {
                         ascii_line.ascii.push(*hex as char);
@@ -325,17 +354,17 @@ pub fn run(matches: ArgMatches) -> Result<(), Box<::std::error::Error>> {
                 }
 
                 if byte_column < column_width {
-                    print!("{:<1$}", "", 5 * (column_width - byte_column) as usize);
+                    write!(&mut stdout, "{:<1$}", "", 5 * (column_width - byte_column) as usize);
                 }
 
                 byte_column = 0x0;
                 let ascii_string: String = ascii_line.ascii.iter().cloned().collect();
                 ascii_line = Line::new();
-                print!("{}", ascii_string); // print ascii string
-                println!("");
+                write!(&mut stdout, "{}", ascii_string); // print ascii string
+                writeln!(&mut stdout, "");
             }
             if true {
-                println!("   bytes: {}", page.bytes);
+                writeln!(&mut stdout, "   bytes: {}", page.bytes);
             }
         }
     }
@@ -357,7 +386,7 @@ pub fn buf_to_array(
     buf: &mut Read,
     buf_len: u64,
     column_width: u64,
-) -> Result<Page, Box<::std::error::Error>> {
+) -> Result<Page> {
     let mut column_count: u64 = 0x0;
     let max_array_size: u16 = <u16>::max_value(); // 2^16;
     let mut page: Page = Page::new();
